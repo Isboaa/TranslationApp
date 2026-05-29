@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Environment variables — aldri commit disse
+.env
+.env.local
+.env*.local
+
+# Claude Code
+.claude/
+
+# Misc
+.DS_Store
+*.pem
+npm-debug.log*

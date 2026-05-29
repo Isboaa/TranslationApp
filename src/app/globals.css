@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Prevent iOS Safari zoom on focus */
+@layer base {
+  input, textarea, select {
+    font-size: 16px;
+  }
+}
