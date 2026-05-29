@@ -91,27 +91,25 @@ export async function POST(req: NextRequest) {
     // Step 1 — translate all sentences with one API call
     const italian = await translateSentences(sentences);
 
-    // Step 2 — generate all TTS segments in parallel
-    // Pattern per sentence: IT (nova) → NO (alloy) → IT (nova)
-    const jobs = sentences.flatMap((no, i) => [
-      tts(italian[i], 'nova'),  // Italian first
-      tts(no, 'alloy'),         // Norwegian
-      tts(italian[i], 'nova'),  // Italian again
+    // Step 2 — generate TTS in parallel, one Italian clip per sentence (reused twice)
+    const [itSegments, noSegments] = await Promise.all([
+      Promise.all(italian.map((it) => tts(it, 'nova'))),
+      Promise.all(sentences.map((no) => tts(no, 'alloy'))),
     ]);
-    const segments = await Promise.all(jobs);
 
     // Step 3 — interleave segments with silences and build WAV
+    // Reuse the same Italian buffer for both repetitions → identical audio guaranteed
     const shortPause = silence(450);
     const longPause = silence(950);
     const chunks: Buffer[] = [];
 
     for (let i = 0; i < sentences.length; i++) {
       chunks.push(
-        segments[i * 3],     // IT
+        itSegments[i],  // IT
         shortPause,
-        segments[i * 3 + 1], // NO
+        noSegments[i],  // NO
         shortPause,
-        segments[i * 3 + 2], // IT again
+        itSegments[i],  // IT again — same buffer, identical pronunciation
         longPause,
       );
     }
