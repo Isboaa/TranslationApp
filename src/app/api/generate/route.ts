@@ -118,7 +118,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       translations: sentences.map((no, i) => ({ norwegian: no, italian: italian[i] })),
-      italianText: italian.join('\n'),
+      italianText: sentences.map((no, i) => `${no}\n${italian[i]}`).join('\n\n'),
       audioBase64: wav.toString('base64'),
     });
   } catch (err) {
