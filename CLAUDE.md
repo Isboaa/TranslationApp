@@ -32,6 +32,18 @@ The response is JSON with `translations`, `italianText`, and `audioBase64` (base
 
 **Audio format detail:** OpenAI TTS `pcm` format returns raw 24kHz 16-bit mono PCM with no headers. Silence is `Buffer.alloc(samples * 2)` (zeros). The WAV header is written manually in `toWav()`.
 
+## Git workflow
+
+After every meaningful change, commit and push to GitHub:
+
+```bash
+git add <files>
+git commit -m "short description of what changed and why"
+git push
+```
+
+Commit often — after each feature, fix, or logical unit of work. Never batch unrelated changes into one commit. This ensures we never lose work and can roll back to any point.
+
 ## Key constraints
 
 - `maxDuration = 60` on the route — Vercel Hobby times out at 10s (fits ~5 sentences), Pro allows 60s
