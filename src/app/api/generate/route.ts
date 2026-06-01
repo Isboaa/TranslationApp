@@ -37,20 +37,42 @@ async function translateSentences(sentences: string[]): Promise<string[]> {
 }
 
 async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
-  const response = await openai.audio.speech.create({
-    model: 'tts-1-hd',
-    voice,
-    input: text,
-    response_format: 'pcm',
-  });
-  const buf = Buffer.from(await response.arrayBuffer());
-  // 16-bit PCM must be even-length; an odd byte would misalign every sample that follows
-  return buf.length % 2 === 1 ? Buffer.concat([buf, Buffer.alloc(1)]) : buf;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await openai.audio.speech.create({
+        model: 'tts-1-hd',
+        voice,
+        input: text,
+        response_format: 'pcm',
+      });
+      const raw = Buffer.from(await response.arrayBuffer());
+
+      // A JSON body (error response not caught by SDK) starts with '{' — reject it
+      if (raw.length > 0 && raw[0] === 0x7b) {
+        throw new Error(`TTS returned JSON instead of PCM: ${raw.slice(0, 120).toString('ascii')}`);
+      }
+
+      // Align to 16-bit boundary
+      const buf = raw.length % 2 === 1 ? Buffer.concat([raw, Buffer.alloc(1)]) : raw;
+
+      // A valid utterance is at least 50 ms = 2400 bytes; shorter means truncation
+      if (buf.length < 2400) {
+        throw new Error(`TTS buffer too small (${buf.length} bytes) — likely truncated`);
+      }
+
+      return buf;
+    } catch (err) {
+      lastError = err;
+      console.warn(`[tts] attempt ${attempt}/3 failed for "${text.slice(0, 40)}":`, err instanceof Error ? err.message : err);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1000));
+    }
+  }
+  throw lastError;
 }
 
 // Run TTS requests with bounded concurrency to avoid rate-limiting from OpenAI.
-// Too many simultaneous requests cause partial/corrupted PCM buffers → garbled audio.
-async function ttsAll(texts: string[], voice: 'nova' | 'alloy', concurrency = 5): Promise<Buffer[]> {
+async function ttsAll(texts: string[], voice: 'nova' | 'alloy', concurrency = 3): Promise<Buffer[]> {
   const results: Buffer[] = new Array(texts.length);
   let next = 0;
   async function worker() {
