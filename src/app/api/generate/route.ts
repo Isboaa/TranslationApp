@@ -62,7 +62,7 @@ function extractPcmFromWav(wav: Buffer): Buffer {
   throw new Error('No data chunk found in WAV response');
 }
 
-async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
+async function tts(text: string, voice: 'nova' | 'alloy', instructions?: string): Promise<Buffer> {
   // Empty/whitespace input is a reliable babble trigger — emit a short silence instead.
   const clean = text.trim();
   if (clean.length === 0) return silence(300);
@@ -73,10 +73,12 @@ async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
       const response = await openai.audio.speech.create({
         // gpt-4o-mini-tts is far less prone to the "babble"/garbled-speech failures
         // that tts-1 / tts-1-hd intermittently produce on certain inputs.
+        // Note: this model ignores the `speed` param — pacing is steered via `instructions`.
         model: 'gpt-4o-mini-tts',
         voice,
         input: clean,
         response_format: 'wav',
+        ...(instructions ? { instructions } : {}),
       });
       // Buffer.from(arrayBuffer) shares memory — force a true copy via Uint8Array
       const wav = Buffer.from(new Uint8Array(await response.arrayBuffer()));
@@ -102,13 +104,18 @@ async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
 }
 
 // Run TTS requests with bounded concurrency to avoid rate-limiting from OpenAI.
-async function ttsAll(texts: string[], voice: 'nova' | 'alloy', concurrency = 3): Promise<Buffer[]> {
+async function ttsAll(
+  texts: string[],
+  voice: 'nova' | 'alloy',
+  instructions?: string,
+  concurrency = 3,
+): Promise<Buffer[]> {
   const results: Buffer[] = new Array(texts.length);
   let next = 0;
   async function worker() {
     while (next < texts.length) {
       const i = next++;
-      results[i] = await tts(texts[i], voice);
+      results[i] = await tts(texts[i], voice, instructions);
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, texts.length) }, worker));
@@ -158,8 +165,10 @@ export async function POST(req: NextRequest) {
     // Step 2 — generate TTS with bounded concurrency (max 3 at a time) to avoid
     // OpenAI rate-limiting, which causes corrupted PCM → garbled audio.
     // Italian first, then Norwegian sequentially to keep total load low.
+    // Italian at normal pace; Norwegian sped up (gpt-4o-mini-tts ignores `speed`,
+    // so pacing is requested via natural-language instructions).
     const itSegments = await ttsAll(italian, 'nova');
-    const noSegments = await ttsAll(sentences, 'alloy');
+    const noSegments = await ttsAll(sentences, 'alloy', 'Speak at a noticeably faster, brisk pace.');
 
     // Step 3 — interleave segments with silences and build WAV
     // Reuse the same Italian buffer for both repetitions → identical audio guaranteed
