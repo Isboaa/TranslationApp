@@ -36,6 +36,26 @@ async function translateSentences(sentences: string[]): Promise<string[]> {
   return result as string[];
 }
 
+// Parse WAV byte stream to locate and extract the raw PCM 'data' chunk.
+// Handles non-standard WAV files where extra chunks (e.g. LIST) precede data.
+function extractPcmFromWav(wav: Buffer): Buffer {
+  if (wav.length < 12 || wav.toString('ascii', 0, 4) !== 'RIFF' || wav.toString('ascii', 8, 12) !== 'WAVE') {
+    throw new Error(`Not a valid WAV file (header: ${wav.slice(0, 12).toString('hex')})`);
+  }
+  let offset = 12;
+  while (offset + 8 <= wav.length) {
+    const id = wav.toString('ascii', offset, offset + 4);
+    const size = wav.readUInt32LE(offset + 4);
+    if (id === 'data') {
+      // Force a true copy so the extracted PCM doesn't share memory with the WAV buffer
+      const pcm = Buffer.from(new Uint8Array(wav.buffer, wav.byteOffset + offset + 8, size));
+      return pcm.length % 2 === 1 ? Buffer.concat([pcm, Buffer.alloc(1)]) : pcm;
+    }
+    offset += 8 + size + (size % 2); // WAV chunks are word-aligned
+  }
+  throw new Error('No data chunk found in WAV response');
+}
+
 async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -44,27 +64,25 @@ async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
         model: 'tts-1-hd',
         voice,
         input: text,
-        response_format: 'pcm',
+        response_format: 'wav',
       });
-      const raw = Buffer.from(await response.arrayBuffer());
+      // Buffer.from(arrayBuffer) shares memory — force a true copy via Uint8Array
+      const wav = Buffer.from(new Uint8Array(await response.arrayBuffer()));
 
-      // A JSON body (error response not caught by SDK) starts with '{' — reject it
-      if (raw.length > 0 && raw[0] === 0x7b) {
-        throw new Error(`TTS returned JSON instead of PCM: ${raw.slice(0, 120).toString('ascii')}`);
+      if (wav.length < 44 || wav.toString('ascii', 0, 4) !== 'RIFF') {
+        throw new Error(`Invalid WAV response (${wav.length} bytes): ${wav.slice(0, 20).toString('hex')}`);
       }
 
-      // Align to 16-bit boundary
-      const buf = raw.length % 2 === 1 ? Buffer.concat([raw, Buffer.alloc(1)]) : raw;
+      const pcm = extractPcmFromWav(wav);
 
-      // A valid utterance is at least 50 ms = 2400 bytes; shorter means truncation
-      if (buf.length < 2400) {
-        throw new Error(`TTS buffer too small (${buf.length} bytes) — likely truncated`);
+      if (pcm.length < 2400) {
+        throw new Error(`PCM too small (${pcm.length} bytes) — likely truncated`);
       }
 
-      return buf;
+      return pcm;
     } catch (err) {
       lastError = err;
-      console.warn(`[tts] attempt ${attempt}/3 failed for "${text.slice(0, 40)}":`, err instanceof Error ? err.message : err);
+      console.warn(`[tts] attempt ${attempt}/3 for "${text.slice(0, 40)}":`, err instanceof Error ? err.message : err);
       if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1000));
     }
   }
