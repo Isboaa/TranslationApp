@@ -63,13 +63,19 @@ function extractPcmFromWav(wav: Buffer): Buffer {
 }
 
 async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
+  // Empty/whitespace input is a reliable babble trigger — emit a short silence instead.
+  const clean = text.trim();
+  if (clean.length === 0) return silence(300);
+
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const response = await openai.audio.speech.create({
-        model: 'tts-1-hd',
+        // gpt-4o-mini-tts is far less prone to the "babble"/garbled-speech failures
+        // that tts-1 / tts-1-hd intermittently produce on certain inputs.
+        model: 'gpt-4o-mini-tts',
         voice,
-        input: text,
+        input: clean,
         response_format: 'wav',
       });
       // Buffer.from(arrayBuffer) shares memory — force a true copy via Uint8Array

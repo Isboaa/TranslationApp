@@ -13,7 +13,7 @@ interface Result {
   audioBase64: string;
 }
 
-const CHUNK_SIZE = 30;
+const CHUNK_SIZE = 20;
 
 function mergeWavs(buffers: ArrayBuffer[]): Blob {
   if (buffers.length === 1) return new Blob([buffers[0]], { type: 'audio/wav' });
