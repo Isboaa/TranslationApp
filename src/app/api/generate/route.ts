@@ -48,6 +48,21 @@ async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
   return buf.length % 2 === 1 ? Buffer.concat([buf, Buffer.alloc(1)]) : buf;
 }
 
+// Run TTS requests with bounded concurrency to avoid rate-limiting from OpenAI.
+// Too many simultaneous requests cause partial/corrupted PCM buffers → garbled audio.
+async function ttsAll(texts: string[], voice: 'nova' | 'alloy', concurrency = 3): Promise<Buffer[]> {
+  const results: Buffer[] = new Array(texts.length);
+  let next = 0;
+  async function worker() {
+    while (next < texts.length) {
+      const i = next++;
+      results[i] = await tts(texts[i], voice);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, texts.length) }, worker));
+  return results;
+}
+
 function silence(ms: number): Buffer {
   // 24000 samples/s × 2 bytes/sample (16-bit) × duration
   return Buffer.alloc(Math.floor(24000 * ms / 1000) * 2);
@@ -88,11 +103,11 @@ export async function POST(req: NextRequest) {
     // Step 1 — translate all sentences with one API call
     const italian = await translateSentences(sentences);
 
-    // Step 2 — generate TTS in parallel, one Italian clip per sentence (reused twice)
-    const [itSegments, noSegments] = await Promise.all([
-      Promise.all(italian.map((it) => tts(it, 'nova'))),
-      Promise.all(sentences.map((no) => tts(no, 'alloy'))),
-    ]);
+    // Step 2 — generate TTS with bounded concurrency (max 3 at a time) to avoid
+    // OpenAI rate-limiting, which causes corrupted PCM → garbled audio.
+    // Italian first, then Norwegian sequentially to keep total load low.
+    const itSegments = await ttsAll(italian, 'nova');
+    const noSegments = await ttsAll(sentences, 'alloy');
 
     // Step 3 — interleave segments with silences and build WAV
     // Reuse the same Italian buffer for both repetitions → identical audio guaranteed
