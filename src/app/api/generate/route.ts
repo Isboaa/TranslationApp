@@ -47,10 +47,16 @@ function extractPcmFromWav(wav: Buffer): Buffer {
     const id = wav.toString('ascii', offset, offset + 4);
     const size = wav.readUInt32LE(offset + 4);
     if (id === 'data') {
+      // 0xFFFFFFFF means "unknown size" (streaming WAV) — clamp to end of buffer
+      const actualSize = (size === 0xFFFFFFFF || offset + 8 + size > wav.length)
+        ? wav.length - offset - 8
+        : size;
       // Force a true copy so the extracted PCM doesn't share memory with the WAV buffer
-      const pcm = Buffer.from(new Uint8Array(wav.buffer, wav.byteOffset + offset + 8, size));
+      const pcm = Buffer.from(new Uint8Array(wav.buffer, wav.byteOffset + offset + 8, actualSize));
       return pcm.length % 2 === 1 ? Buffer.concat([pcm, Buffer.alloc(1)]) : pcm;
     }
+    // 0xFFFFFFFF on a non-data chunk means unknown size — can't skip safely, stop scanning
+    if (size === 0xFFFFFFFF) break;
     offset += 8 + size + (size % 2); // WAV chunks are word-aligned
   }
   throw new Error('No data chunk found in WAV response');
