@@ -38,13 +38,14 @@ async function translateSentences(sentences: string[]): Promise<string[]> {
 
 async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
   const response = await openai.audio.speech.create({
-    model: 'tts-1',
+    model: 'tts-1-hd',
     voice,
     input: text,
-    // PCM = raw 24kHz 16-bit mono, no headers — easy to concatenate
     response_format: 'pcm',
   });
-  return Buffer.from(await response.arrayBuffer());
+  const buf = Buffer.from(await response.arrayBuffer());
+  // 16-bit PCM must be even-length; an odd byte would misalign every sample that follows
+  return buf.length % 2 === 1 ? Buffer.concat([buf, Buffer.alloc(1)]) : buf;
 }
 
 function silence(ms: number): Buffer {
@@ -84,10 +85,6 @@ export async function POST(req: NextRequest) {
     if (!Array.isArray(sentences) || sentences.length === 0) {
       return NextResponse.json({ error: 'Ingen setninger oppgitt' }, { status: 400 });
     }
-    if (sentences.length > 50) {
-      return NextResponse.json({ error: 'Maks 50 setninger om gangen' }, { status: 400 });
-    }
-
     // Step 1 — translate all sentences with one API call
     const italian = await translateSentences(sentences);
 
