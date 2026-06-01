@@ -13,6 +13,27 @@ interface Result {
   audioBase64: string;
 }
 
+const CHUNK_SIZE = 30;
+
+function mergeWavs(buffers: ArrayBuffer[]): Blob {
+  if (buffers.length === 1) return new Blob([buffers[0]], { type: 'audio/wav' });
+  const totalPcm = buffers.reduce((sum, b) => sum + b.byteLength - 44, 0);
+  const out = new Uint8Array(44 + totalPcm);
+  // Copy WAV header from first chunk
+  out.set(new Uint8Array(buffers[0].slice(0, 44)));
+  // Fix RIFF chunk size and data chunk size to reflect merged length
+  const view = new DataView(out.buffer);
+  view.setUint32(4, 36 + totalPcm, true);
+  view.setUint32(40, totalPcm, true);
+  // Append raw PCM (skip 44-byte header) from each chunk
+  let offset = 44;
+  for (const buf of buffers) {
+    out.set(new Uint8Array(buf.slice(44)), offset);
+    offset += buf.byteLength - 44;
+  }
+  return new Blob([out], { type: 'audio/wav' });
+}
+
 export default function Home() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -29,7 +50,6 @@ export default function Home() {
     const sentences = input
       .split('\n')
       .map((s) => s.trim())
-      // Strip bullet points and list markers from Notes-appen: •, -, *, 1. 2. osv.
       .map((s) => s.replace(/^[•\-\*•‣◦⁃]+\s*/, '').replace(/^\d+[\.\)]\s*/, '').trim())
       .filter((s) => s.length > 0);
 
@@ -41,33 +61,56 @@ export default function Home() {
     setLoading(true);
     setError('');
     setResult(null);
-    setStatus('Oversetter til italiensk…');
 
-    // Revoke previous audio URL to free memory
     if (audioRef.current) {
       URL.revokeObjectURL(audioRef.current);
       audioRef.current = null;
     }
 
+    // Split into chunks so each request stays within Vercel's 60s timeout
+    const chunks: string[][] = [];
+    for (let i = 0; i < sentences.length; i += CHUNK_SIZE) {
+      chunks.push(sentences.slice(i, i + CHUNK_SIZE));
+    }
+
+    const allTranslations: Translation[] = [];
+    const wavBuffers: ArrayBuffer[] = [];
+
     try {
-      // Give the user some status feedback while waiting
-      const statusTimer = setTimeout(() => setStatus('Lager audio…'), 3000);
+      for (let i = 0; i < chunks.length; i++) {
+        setStatus(
+          chunks.length === 1
+            ? 'Oversetter og lager audio…'
+            : `Del ${i + 1} av ${chunks.length} – lager audio…`
+        );
 
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sentences }),
-      });
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sentences: chunks[i] }),
+        });
 
-      clearTimeout(statusTimer);
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Serverfeil');
+        }
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Serverfeil');
+        const data: Result = await res.json();
+        allTranslations.push(...data.translations);
+
+        const bytes = Uint8Array.from(atob(data.audioBase64), (c) => c.charCodeAt(0));
+        wavBuffers.push(bytes.buffer);
       }
 
-      const data: Result = await res.json();
-      setResult(data);
+      if (chunks.length > 1) setStatus('Slår sammen audio…');
+      const audioBlob = mergeWavs(wavBuffers);
+      audioRef.current = URL.createObjectURL(audioBlob);
+
+      const italianText = allTranslations
+        .map((t) => `${t.norwegian}\n${t.italian}`)
+        .join('\n\n');
+
+      setResult({ translations: allTranslations, italianText, audioBase64: '' });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Noe gikk galt');
     } finally {
@@ -76,13 +119,8 @@ export default function Home() {
     }
   }
 
-  function getAudioUrl(base64: string): string {
-    if (audioRef.current) return audioRef.current;
-    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-    const blob = new Blob([bytes], { type: 'audio/wav' });
-    const url = URL.createObjectURL(blob);
-    audioRef.current = url;
-    return url;
+  function getAudioUrl(): string {
+    return audioRef.current ?? '';
   }
 
   function downloadText() {
@@ -92,8 +130,8 @@ export default function Home() {
   }
 
   function downloadAudio() {
-    if (!result) return;
-    triggerDownload(getAudioUrl(result.audioBase64), 'italiano.wav');
+    if (!audioRef.current) return;
+    triggerDownload(audioRef.current, 'italiano.wav');
   }
 
   function triggerDownload(url: string, filename: string) {
@@ -171,9 +209,9 @@ export default function Home() {
 
             {/* Translations preview */}
             <h2 className="text-xs font-semibold text-gray-500 tracking-widest mb-3">
-              OVERSETTELSER
+              OVERSETTELSER ({result.translations.length} setninger)
             </h2>
-            <div className="space-y-2 mb-8">
+            <div className="space-y-2 mb-8 max-h-96 overflow-y-auto pr-1">
               {result.translations.map((t, i) => (
                 <div
                   key={i}
@@ -190,7 +228,7 @@ export default function Home() {
               AUDIO
             </h2>
             <audio
-              src={getAudioUrl(result.audioBase64)}
+              src={getAudioUrl()}
               controls
               className="w-full mb-5 rounded-xl"
               style={{ colorScheme: 'dark' }}

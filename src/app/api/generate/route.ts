@@ -50,7 +50,7 @@ async function tts(text: string, voice: 'nova' | 'alloy'): Promise<Buffer> {
 
 // Run TTS requests with bounded concurrency to avoid rate-limiting from OpenAI.
 // Too many simultaneous requests cause partial/corrupted PCM buffers → garbled audio.
-async function ttsAll(texts: string[], voice: 'nova' | 'alloy', concurrency = 3): Promise<Buffer[]> {
+async function ttsAll(texts: string[], voice: 'nova' | 'alloy', concurrency = 5): Promise<Buffer[]> {
   const results: Buffer[] = new Array(texts.length);
   let next = 0;
   async function worker() {
